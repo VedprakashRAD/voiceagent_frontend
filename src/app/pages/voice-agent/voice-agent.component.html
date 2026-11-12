@@ -1,0 +1,50 @@
+<!-- ═══════════════════════════════════════════════════════════
+     ReadyAssist Voice Agent — Chat Interface
+     Premium dark-themed AI assistant chat UI
+     ═══════════════════════════════════════════════════════════ -->
+
+<div class="voice-screen">
+
+  <!-- Background -->
+  <div class="background-glow"></div>
+
+  <!-- Top branding -->
+  <div class="top-bar">
+    <button class="back-btn" (click)="goBack()">← Back</button>
+    <div class="logo">
+      <span class="logo-dot"></span>
+      {{ userName }} <ng-container *ngIf="vehicleName"> | {{ vehicleName }}</ng-container>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="voice-content">
+
+    <!-- Particle sphere via Web Component -->
+    <div class="sphere-container">
+      <voice-orb #orb [attr.state]="orbState" style="width: 720px; max-width: 100%;"></voice-orb>
+    </div>
+
+    <!-- Status -->
+    <div class="status">
+      <h1>{{ statusText }}</h1>
+      <p>{{ subtitle }}</p>
+    </div>
+
+    <!-- Microphone -->
+    <button
+      class="mic-button"
+      [class.listening]="isListening"
+      (click)="toggleListening()">
+      <span class="mic-icon">
+        {{ isListening ? '◼' : '🎙' }}
+      </span>
+    </button>
+
+    <div class="hint">
+      {{ isListening ? 'Listening...' : 'Tap to speak' }}
+    </div>
+
+  </div>
+
+</div>

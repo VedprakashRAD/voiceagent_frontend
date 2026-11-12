@@ -1,0 +1,97 @@
+<div class="host-wrapper">
+  <!-- 3D Ambient Background -->
+  <div class="ambient-orb-wrap">
+    <div class="orb-sweep"></div>
+    <div class="ambient-ring r1"></div>
+    <div class="ambient-ring r2"></div>
+    <div class="ambient-ring r3"></div>
+  </div>
+
+  <section class="screen">
+    <div class="topbar">
+      <div class="brand"><span class="dot"></span> ReadyAssist</div>
+    </div>
+
+    <div class="select-head">
+      <p class="eyebrow">Voice dispatch</p>
+      <h1>Who needs help?</h1>
+      <p>Pick a vehicle to start a session with the assistant.</p>
+    </div>
+
+    <div class="section-label">
+      <span>Registered users</span>
+      <button class="add-user-btn" aria-label="Add user" (click)="toggleAddUserForm()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+      </button>
+    </div>
+
+    <!-- Inline Add User Form -->
+    <div class="add-user-form" *ngIf="showAddUserForm">
+      <input type="text" [(ngModel)]="newUserName" placeholder="Name, e.g. Sanjoe" (keyup.enter)="createUser()" autofocus/>
+      <div *ngIf="errorMessage" class="error-text">{{ errorMessage }}</div>
+      <div class="add-form-actions">
+        <button class="btn-secondary" (click)="toggleAddUserForm()">Cancel</button>
+        <button class="btn-primary" (click)="createUser()">Create User</button>
+      </div>
+    </div>
+
+    <div class="user-list">
+      <div *ngIf="usersWithVehicles.length === 0" style="color: var(--fog-dim); font-size: 14px;">
+        No users found. Click the add icon above to create one.
+      </div>
+
+      <div class="user-card" *ngFor="let user of usersWithVehicles">
+        <div class="user-row">
+          <div class="avatar">{{ user.name.charAt(0).toUpperCase() }}</div>
+          <div>
+            <div class="user-name">{{ user.name }}</div>
+            <div class="user-meta">{{ user.vehicles.length }} vehicle{{ user.vehicles.length !== 1 ? 's' : '' }}</div>
+          </div>
+          <div class="user-actions">
+            <button class="ghost-btn danger" aria-label="Remove user" (click)="deleteUser(user)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="vehicle-list">
+          <button 
+            class="vehicle-row" 
+            *ngFor="let vehicle of user.vehicles"
+            (click)="startChat(user, vehicle)">
+            
+            <div class="vehicle-glyph">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17h14M5 17a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm14 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM3 17V10l2-5h14l2 5v7"/></svg>
+            </div>
+            <div class="vehicle-info">
+              <div class="vehicle-model">{{ vehicle.make }} {{ vehicle.model }}</div>
+              <span class="plate">{{ vehicle.registration_number }}</span>
+            </div>
+            <div class="vehicle-arrow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+            </div>
+          </button>
+        </div>
+
+        <button class="add-vehicle-row" *ngIf="!showAddVehicleForm[user._id]" (click)="toggleAddVehicleForm(user)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          Add vehicle
+        </button>
+
+        <div class="add-form" *ngIf="showAddVehicleForm[user._id]">
+          <input type="text" [(ngModel)]="newVehicle.make" placeholder="Make, e.g. Hyundai" autofocus/>
+          <input type="text" [(ngModel)]="newVehicle.model" placeholder="Model, e.g. i20" />
+          <input type="text" [(ngModel)]="newVehicle.registration_number" placeholder="Plate, e.g. KA 01 AB 1234" (keyup.enter)="tagVehicle(user)"/>
+          <select [(ngModel)]="newVehicle.vehicle_type">
+            <option value="car">Car</option>
+            <option value="bike">Bike</option>
+          </select>
+          <div class="add-form-actions">
+            <button class="btn-secondary" (click)="toggleAddVehicleForm(user)">Cancel</button>
+            <button class="btn-primary" (click)="tagVehicle(user)">Add vehicle</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
