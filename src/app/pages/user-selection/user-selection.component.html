@@ -9,35 +9,38 @@
 
   <section class="screen">
     <div class="topbar">
+      <button class="back-btn" *ngIf="customer" (click)="startOver()">← Back</button>
       <div class="brand"><span class="dot"></span> ReadyAssist</div>
     </div>
 
     <div class="select-head">
       <p class="eyebrow">Voice dispatch</p>
       <h1>Who needs help?</h1>
-      <p>Pick a vehicle to start a session with the assistant.</p>
+      <p>{{ customer ? 'Pick a vehicle to start a session with the assistant.' : 'Add your name and mobile number to begin' }}</p>
     </div>
 
-    <div class="section-label">
-      <span>Registered users</span>
-      <button class="add-user-btn" aria-label="Add user" (click)="toggleAddUserForm()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+    <div class="customer-form" *ngIf="!customer">
+      <label for="customerName">Name</label>
+      <input id="customerName" type="text" [(ngModel)]="customerName" placeholder="Enter your name" autofocus/>
+
+      <label for="customerMobile">Mobile number</label>
+      <input id="customerMobile" type="tel" [(ngModel)]="customerMobile" placeholder="Enter 10-digit mobile number" (keyup.enter)="checkCustomer()"/>
+
+      <div *ngIf="lookupError" class="error-text">{{ lookupError }}</div>
+
+      <button class="btn-primary" [disabled]="isLookingUp || !customerName.trim() || !customerMobile.trim()" (click)="checkCustomer()">
+        {{ isLookingUp ? 'Checking…' : 'Continue' }}
       </button>
     </div>
 
-    <!-- Inline Add User Form -->
-    <div class="add-user-form" *ngIf="showAddUserForm">
-      <input type="text" [(ngModel)]="newUserName" placeholder="Name, e.g. Sanjoe" (keyup.enter)="createUser()" autofocus/>
-      <div *ngIf="errorMessage" class="error-text">{{ errorMessage }}</div>
-      <div class="add-form-actions">
-        <button class="btn-secondary" (click)="toggleAddUserForm()">Cancel</button>
-        <button class="btn-primary" (click)="createUser()">Create User</button>
-      </div>
+    <ng-container *ngIf="customer">
+    <div class="section-label">
+      <span>Registered vehicle</span>
     </div>
 
     <div class="user-list">
-      <div *ngIf="usersWithVehicles.length === 0" style="color: var(--fog-dim); font-size: 14px;">
-        No users found. Click the add icon above to create one.
+      <div *ngIf="usersWithVehicles.length === 0 || usersWithVehicles[0].vehicles.length === 0" class="empty-vehicle">
+        No vehicle registered yet. Add one to continue.
       </div>
 
       <div class="user-card" *ngFor="let user of usersWithVehicles">
@@ -45,7 +48,7 @@
           <div class="avatar">{{ user.name.charAt(0).toUpperCase() }}</div>
           <div>
             <div class="user-name">{{ user.name }}</div>
-            <div class="user-meta">{{ user.vehicles.length }} vehicle{{ user.vehicles.length !== 1 ? 's' : '' }}</div>
+            <div class="user-meta">{{ customer?.mobileNo }}</div>
           </div>
           <div class="user-actions">
             <button class="ghost-btn danger" aria-label="Remove user" (click)="deleteUser(user)">
@@ -66,6 +69,7 @@
             <div class="vehicle-info">
               <div class="vehicle-model">{{ vehicle.make }} {{ vehicle.model }}</div>
               <span class="plate">{{ vehicle.registration_number }}</span>
+              <div class="assist-hint">Need assistance? Click here</div>
             </div>
             <div class="vehicle-arrow">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
@@ -73,12 +77,12 @@
           </button>
         </div>
 
-        <button class="add-vehicle-row" *ngIf="!showAddVehicleForm[user._id]" (click)="toggleAddVehicleForm(user)">
+        <button class="add-vehicle-row" *ngIf="user.vehicles.length === 0 && !showAddVehicleForm[user._id]" (click)="toggleAddVehicleForm(user)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
           Add vehicle
         </button>
 
-        <div class="add-form" *ngIf="showAddVehicleForm[user._id]">
+        <div class="add-form" *ngIf="user.vehicles.length === 0 && showAddVehicleForm[user._id]">
           <input type="text" [(ngModel)]="newVehicle.make" placeholder="Make, e.g. Hyundai" autofocus/>
           <input type="text" [(ngModel)]="newVehicle.model" placeholder="Model, e.g. i20" />
           <input type="text" [(ngModel)]="newVehicle.registration_number" placeholder="Plate, e.g. KA 01 AB 1234" (keyup.enter)="tagVehicle(user)"/>
@@ -93,5 +97,6 @@
         </div>
       </div>
     </div>
+    </ng-container>
   </section>
 </div>

@@ -19,11 +19,24 @@ export interface Vehicle {
   created_at: string;
 }
 
+export interface CustomerDetails {
+  success: boolean;
+  name: string;
+  userId: string;
+  mobileNo: string;
+  customerId?: number;
+  customerName?: string;
+  customerEmail?: string | null;
+  isSubscribedCustomer?: boolean;
+  subscriptionList?: unknown[];
+  message?: string;
+}
+
 @Injectable({
   providedIn: 'root'
 })
 export class ApiService {
-  private readonly apiUrl = 'http://localhost:8000/api';
+  private readonly apiUrl = '/api';
 
   constructor(private http: HttpClient) {}
 
@@ -49,5 +62,9 @@ export class ApiService {
 
   tagVehicle(userId: string, vehicle: Partial<Vehicle>): Observable<Vehicle> {
     return this.http.post<Vehicle>(`${this.apiUrl}/users/${userId}/vehicles`, vehicle);
+  }
+
+  checkSubscription(name: string, mobileNo: string): Observable<CustomerDetails> {
+    return this.http.post<CustomerDetails>(`${this.apiUrl}/customers/is-subscribed`, { name, mobileNo });
   }
 }

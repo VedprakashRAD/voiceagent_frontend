@@ -44,7 +44,7 @@ export interface SessionInfo {
   providedIn: 'root'
 })
 export class ChatService {
-  private readonly apiUrl = 'http://localhost:8000/api';
+  private readonly apiUrl = '/api';
 
   private sessionId = new BehaviorSubject<string>('');
   private sessionState = new BehaviorSubject<string>('NEW');

@@ -80,6 +80,10 @@
         },
         "serve": {
           "builder": "@angular/build:dev-server",
+          "options": {
+            "allowedHosts": ["preconversational-piedad-bardier.ngrok-free.dev"],
+            "proxyConfig": "proxy.conf.json"
+          },
           "configurations": {
             "production": {
               "buildTarget": "voiceagent_frontend:build:production"

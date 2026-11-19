@@ -1,8 +1,8 @@
 import { Component, OnInit, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
-import { ApiService, User, Vehicle } from '../../services/api.service';
+import { ActivatedRoute, Router } from '@angular/router';
+import { ApiService, CustomerDetails, User, Vehicle } from '../../services/api.service';
 import { forkJoin } from 'rxjs';
 
 export interface UserWithVehicles extends User {
@@ -26,6 +26,13 @@ export class UserSelectionComponent implements OnInit {
   // Form inputs
   newUserName = '';
   errorMessage = '';
+
+  customerName = '';
+  customerMobile = '';
+  customer: CustomerDetails | null = null;
+  lookupError = '';
+  isLookingUp = false;
+
   newVehicle = {
     make: '',
     model: '',
@@ -36,21 +43,34 @@ export class UserSelectionComponent implements OnInit {
   constructor(
     private api: ApiService, 
     private router: Router,
+    private route: ActivatedRoute,
     private cdr: ChangeDetectorRef
   ) {}
 
   ngOnInit() {
+    const customerParam = this.route.snapshot.queryParamMap.get('customer');
+    if (customerParam) {
+      try {
+        this.customer = JSON.parse(customerParam) as CustomerDetails;
+        this.loadData(this.customer.userId);
+        return;
+      } catch {
+        this.customer = null;
+      }
+    }
     this.loadData();
   }
 
-  loadData() {
+  loadData(userId?: string) {
     forkJoin({
       users: this.api.getUsers(),
       vehicles: this.api.getAllVehicles()
     }).subscribe(({ users, vehicles }) => {
-      this.usersWithVehicles = users.map(u => ({
+      const sourceUsers = userId ? users.filter(u => u._id === userId) : users;
+      this.usersWithVehicles = sourceUsers.map(u => ({
         ...u,
-        vehicles: vehicles.filter(v => v.user_id === u._id)
+        name: this.customer?.customerName || this.customer?.name || u.name,
+        vehicles: vehicles.slice(0, 1)
       }));
       this.cdr.detectChanges();
     });
@@ -130,12 +150,42 @@ export class UserSelectionComponent implements OnInit {
     });
   }
 
+  checkCustomer() {
+    if (!this.customerName.trim() || !this.customerMobile.trim() || this.isLookingUp) return;
+
+    this.lookupError = '';
+    this.isLookingUp = true;
+    this.api.checkSubscription(this.customerName.trim(), this.customerMobile.trim()).subscribe({
+      next: (customer) => {
+        this.customer = customer;
+        this.loadData(customer.userId);
+        this.isLookingUp = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.lookupError = 'Unable to find customer details. Please try again.';
+        this.isLookingUp = false;
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  startOver() {
+    this.customer = null;
+    this.customerName = '';
+    this.customerMobile = '';
+    this.lookupError = '';
+    this.usersWithVehicles = [];
+    this.router.navigate(['/']);
+  }
+
   // --- Navigation ---
   startChat(user: User, vehicle: Vehicle) {
     this.router.navigate(['/chat'], {
       queryParams: {
         userId: user._id,
-        vehicleId: vehicle._id
+        vehicleId: vehicle._id,
+        customer: JSON.stringify(this.customer)
       }
     });
   }

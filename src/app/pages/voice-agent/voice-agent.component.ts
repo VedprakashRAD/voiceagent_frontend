@@ -27,6 +27,7 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   
   userId: string | null = null;
   vehicleId: string | null = null;
+  customerParam = '';
   userName: string = 'ReadyAssist AI';
   vehicleName: string = '';
   
@@ -51,6 +52,7 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
     this.route.queryParams.subscribe(params => {
       this.userId = params['userId'] || null;
       this.vehicleId = params['vehicleId'] || null;
+      this.customerParam = params['customer'] || '';
       
       if (!this.userId || !this.vehicleId) {
         console.warn("User or Vehicle ID not provided! Redirecting to landing page.");
@@ -106,6 +108,13 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
     if (this.aiSpeaking) return 'speaking';
     if (this.isListening) return 'listening';
     return 'idle';
+  }
+
+  get statusHeading(): string {
+    if (this.statusText === 'How can I help?' && this.userName && this.userName !== 'ReadyAssist AI') {
+      return `${this.userName} ${this.statusText}`;
+    }
+    return this.statusText;
   }
 
   private initSpeechApi(): void {
@@ -164,7 +173,9 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   }
 
   goBack() {
-    this.router.navigate(['/']);
+    this.router.navigate(['/'], {
+      queryParams: this.customerParam ? { customer: this.customerParam } : {}
+    });
   }
 
   toggleListening(): void {
