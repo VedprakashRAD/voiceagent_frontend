@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ChatService } from '../../services/chat.service';
-import { ApiService } from '../../services/api.service';
+import { ApiService, CustomerDetails } from '../../services/api.service';
 
 @Component({
   selector: 'app-voice-agent',
@@ -28,6 +28,11 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   userId: string | null = null;
   vehicleId: string | null = null;
   customerParam = '';
+  customer: CustomerDetails | null = null;
+  customerName = '';
+  customerMobile = '';
+  customerId = '';
+  externalVehicleId = '';
   userName: string = 'ReadyAssist AI';
   vehicleName: string = '';
   
@@ -53,7 +58,22 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
       this.userId = params['userId'] || null;
       this.vehicleId = params['vehicleId'] || null;
       this.customerParam = params['customer'] || '';
-      
+
+      if (this.customerParam) {
+        try {
+          this.customer = JSON.parse(this.customerParam) as CustomerDetails;
+          this.customerName = this.customer.customerName || this.customer.name || '';
+          this.customerMobile = this.customer.mobileNo || '';
+          this.customerId = this.customer.customerId != null ? String(this.customer.customerId) : '';
+          this.externalVehicleId = this.customer.externalVehicleId != null ? String(this.customer.externalVehicleId) : '';
+          if (this.customerName) {
+            this.userName = this.customerName;
+          }
+        } catch {
+          this.customer = null;
+        }
+      }
+
       if (!this.userId || !this.vehicleId) {
         console.warn("User or Vehicle ID not provided! Redirecting to landing page.");
         this.router.navigate(['/']);
@@ -82,7 +102,9 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
       this.apiService.getUsers().subscribe(users => {
         const user = users.find(u => u._id === this.userId);
         if (user) {
-          this.userName = user.name;
+          if (!this.customerName) {
+            this.userName = user.name;
+          }
           this.cdr.detectChanges();
         }
       });
@@ -261,7 +283,7 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
     this.inputText = '';
     this.isLoading = true;
 
-    this.chatService.sendMessage(message, this.sessionId, this.userId, this.vehicleId).subscribe({
+    this.chatService.sendMessage(message, this.sessionId, this.userId, this.vehicleId, this.customer).subscribe({
       next: (response) => {
         this.isLoading = false;
         this.cdr.detectChanges();
@@ -275,3 +297,4 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
     });
   }
 }
+

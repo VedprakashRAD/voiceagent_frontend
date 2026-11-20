@@ -27,6 +27,7 @@ export interface CustomerDetails {
   customerId?: number;
   customerName?: string;
   customerEmail?: string | null;
+  externalVehicleId?: number | string;
   isSubscribedCustomer?: boolean;
   subscriptionList?: unknown[];
   message?: string;

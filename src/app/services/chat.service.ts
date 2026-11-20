@@ -7,6 +7,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, BehaviorSubject, tap, catchError, throwError } from 'rxjs';
+import { CustomerDetails } from './api.service';
 
 export interface ChatMessage {
   text: string;
@@ -59,12 +60,22 @@ export class ChatService {
   /**
    * Send a chat message and get the agent's response.
    */
-  sendMessage(message: string, sessionId?: string, userId?: string | null, vehicleId?: string | null): Observable<ChatResponse> {
+  sendMessage(
+    message: string,
+    sessionId?: string,
+    userId?: string | null,
+    vehicleId?: string | null,
+    customer?: CustomerDetails | null
+  ): Observable<ChatResponse> {
     return this.http.post<ChatResponse>(`${this.apiUrl}/chat`, {
       message,
       session_id: sessionId || this.sessionId.value || undefined,
       user_id: userId || undefined,
       vehicle_id: vehicleId || undefined,
+      customer_name: customer?.customerName || customer?.name || undefined,
+      customer_mobile: customer?.mobileNo || undefined,
+      customer_id: customer?.customerId != null ? String(customer.customerId) : undefined,
+      external_vehicle_id: customer?.externalVehicleId != null ? String(customer.externalVehicleId) : undefined,
     }).pipe(
       tap(response => {
         this.sessionId.next(response.session_id);
