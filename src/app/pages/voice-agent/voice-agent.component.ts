@@ -16,9 +16,6 @@ import { ApiService, CustomerDetails } from '../../services/api.service';
 export class VoiceAgentComponent implements OnInit, OnDestroy {
   @ViewChild('orb') orbRef!: ElementRef;
   
-  statusText = 'How can I help?';
-  subtitle = 'Tap the microphone to speak';
-
   inputText = '';
   isLoading = false;
   sessionId = '';
@@ -41,6 +38,7 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   aiSpeaking = false;
   recognition: any = null;
   synthesis: any = null;
+  private isStartingRecognition = false;
 
   // Web Audio API properties for orb
   private audioContext?: AudioContext;
@@ -133,10 +131,27 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   }
 
   get statusHeading(): string {
-    if (this.statusText === 'How can I help?' && this.userName && this.userName !== 'ReadyAssist AI') {
-      return `${this.userName} ${this.statusText}`;
+    if (this.isLoading) return 'Thinking...';
+    if (this.aiSpeaking) return 'Speaking...';
+    if (this.isListening) return 'Listening...';
+    if (this.userName && this.userName !== 'ReadyAssist AI') {
+      return `${this.userName}, how can I help?`;
     }
-    return this.statusText;
+    return 'How can I help?';
+  }
+
+  get statusSubtitle(): string {
+    if (this.isLoading) return 'Checking the latest details...';
+    if (this.aiSpeaking) return 'ReadyAssist is responding';
+    if (this.isListening) return 'Tell me what you need';
+    return 'Tap the microphone to speak';
+  }
+
+  get hintText(): string {
+    if (this.isLoading) return 'Thinking...';
+    if (this.aiSpeaking) return 'Speaking...';
+    if (this.isListening) return 'Listening...';
+    return 'Tap to speak';
   }
 
   private initSpeechApi(): void {
@@ -154,6 +169,7 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
       this.recognition.lang = 'en-US';
 
       this.recognition.onstart = () => {
+        this.isStartingRecognition = false;
         this.isListening = true;
         this.startAudioAnalysis();
         this.cdr.detectChanges();
@@ -176,12 +192,14 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
 
       this.recognition.onerror = (event: any) => {
         console.error('Speech recognition error', event.error);
+        this.isStartingRecognition = false;
         this.isListening = false;
         this.stopAudioAnalysis();
         this.cdr.detectChanges();
       };
 
       this.recognition.onend = () => {
+        this.isStartingRecognition = false;
         this.isListening = false;
         this.stopAudioAnalysis();
         this.cdr.detectChanges();
@@ -206,15 +224,19 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
       return;
     }
 
-    if (this.isListening) {
-      this.statusText = 'How can I help?';
-      this.subtitle = 'Tap the microphone to speak';
+    if (this.isListening || this.isStartingRecognition) {
+      this.isStartingRecognition = false;
       this.recognition.stop();
-    } else {
-      this.statusText = 'Listening...';
-      this.subtitle = 'Tell me what you need';
-      this.inputText = '';
+      return;
+    }
+
+    this.inputText = '';
+    try {
+      this.isStartingRecognition = true;
       this.recognition.start();
+    } catch (err) {
+      this.isStartingRecognition = false;
+      console.error('Speech recognition failed to start', err);
     }
   }
 
@@ -282,6 +304,7 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
 
     this.inputText = '';
     this.isLoading = true;
+    this.cdr.detectChanges();
 
     this.chatService.sendMessage(message, this.sessionId, this.userId, this.vehicleId, this.customer).subscribe({
       next: (response) => {
