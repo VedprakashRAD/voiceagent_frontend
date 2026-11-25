@@ -192,7 +192,7 @@ export class VoiceService {
     }
   }
 
-  /** Stop microphone streaming. Grok's server VADfinalises the turn. */
+  /** Stop microphone streaming. Grok's server VAD finalises the turn. */
   stopRecording(): void {
     this.cleanupCapture();
     this.updateState({ isRecording: false, isListening: false });
