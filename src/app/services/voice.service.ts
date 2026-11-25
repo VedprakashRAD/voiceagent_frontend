@@ -21,7 +21,9 @@ export interface VoiceState {
 
 export interface VoiceMessage {
   type: 'session_info' | 'ready' | 'transcription' | 'response_delta' |
-        'response_done' | 'audio' | 'speech_started' | 'tool_call' | 'error' | 'pong';
+        'response_done' | 'audio' | 'speech_started' | 'tool_call' | 'error' | 'pong' |
+        'session_closed';
+  reason?: string;
   text?: string;
   data?: string;
   name?: string;
@@ -39,6 +41,12 @@ export interface VoiceSessionContext {
 }
 
 const SAMPLE_RATE = 24000;
+
+// Client-controlled turns: only upload actual speech, then commit.
+// 4096 samples at 24 kHz ≈ 171 ms per frame; 6 silent frames ≈ 1 s.
+const VOICE_RMS_THRESHOLD = 0.015;
+const SILENCE_FRAMES_TO_COMMIT = 6;
+const PREROLL_FRAMES = 3;
 
 @Injectable({
   providedIn: 'root'
@@ -59,6 +67,12 @@ export class VoiceService {
   private nextPlayTime = 0;
   private speakingTimer: any = null;
   private audioUnlockArmed = false;
+
+  // Voice activity detection for client-controlled turns.
+  private speechActive = false;
+  private silenceFrames = 0;
+  private preRollFrames: Int16Array[] = [];
+  private lastSessionContext: VoiceSessionContext | null = null;
 
   private voiceStateSubject = new BehaviorSubject<VoiceState>({
     isConnected: false,
@@ -129,6 +143,7 @@ export class VoiceService {
 
       this.websocket.onclose = () => {
         settled = true;
+        this.cleanupCapture();
         this.updateState({ isConnected: false, isRecording: false, isListening: false });
       };
     });
@@ -136,15 +151,17 @@ export class VoiceService {
 
   /** Send customer/vehicle details so the backend session is personalised. */
   sendSessionContext(context: VoiceSessionContext): void {
+    this.lastSessionContext = context;
     this.sendJson({ type: 'session_context', ...context });
   }
 
   /** Start streaming microphone audio to Grok. */
   async startRecording(): Promise<void> {
+    await this.connect();
     if (this.captureStream) {
+      this.updateState({ isRecording: true, isListening: true, error: null });
       return;
     }
-    await this.connect();
 
     try {
       this.captureStream = await navigator.mediaDevices.getUserMedia({
@@ -173,14 +190,48 @@ export class VoiceService {
         const input = event.inputBuffer.getChannelData(0);
         const pcm = this.resample(input, actualRate, SAMPLE_RATE);
         const int16 = new Int16Array(pcm.length);
+        let sumSquares = 0;
         for (let i = 0; i < pcm.length; i++) {
           const sample = Math.max(-1, Math.min(1, pcm[i]));
           int16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+          sumSquares += sample * sample;
         }
-        this.sendJson({
-          type: 'audio',
-          data: this.arrayBufferToBase64(int16.buffer)
-        });
+        const rms = Math.sqrt(sumSquares / pcm.length);
+
+        // Never upload while Grok is talking: avoids speaker echo and audio cost.
+        if (this.getState().isSpeaking) {
+          if (this.speechActive) {
+            this.sendJson({ type: 'commit' });
+            this.speechActive = false;
+            this.silenceFrames = 0;
+            this.preRollFrames = [];
+          }
+          return;
+        }
+
+        if (!this.speechActive) {
+          // Keep a short pre-roll so soft first syllables aren't clipped.
+          this.preRollFrames.push(int16);
+          if (this.preRollFrames.length > PREROLL_FRAMES) this.preRollFrames.shift();
+          if (rms <= VOICE_RMS_THRESHOLD) return;
+          this.speechActive = true;
+          this.silenceFrames = 0;
+          for (const frame of this.preRollFrames) this.sendAudioFrame(frame);
+          this.preRollFrames = [];
+          return;
+        }
+
+        this.sendAudioFrame(int16);
+        if (rms < VOICE_RMS_THRESHOLD) {
+          this.silenceFrames += 1;
+          if (this.silenceFrames >= SILENCE_FRAMES_TO_COMMIT) {
+            this.sendJson({ type: 'commit' });
+            this.speechActive = false;
+            this.silenceFrames = 0;
+          }
+        } else {
+          this.silenceFrames = 0;
+        }
       };
 
       this.sourceNode.connect(this.processor);
@@ -201,7 +252,7 @@ export class VoiceService {
     }
   }
 
-  /** Stop microphone streaming. Grok's server VAD finalises the turn. */
+  /** Stop microphone streaming. Client-side VAD commits each spoken turn. */
   stopRecording(): void {
     this.cleanupCapture();
     this.updateState({ isRecording: false, isListening: false });
@@ -242,6 +293,13 @@ export class VoiceService {
     }
   }
 
+  private sendAudioFrame(int16: Int16Array): void {
+    this.sendJson({
+      type: 'audio',
+      data: this.arrayBufferToBase64(int16.buffer as ArrayBuffer)
+    });
+  }
+
   private handleWebSocketMessage(event: MessageEvent): void {
     let message: VoiceMessage;
     try {
@@ -257,6 +315,19 @@ export class VoiceService {
         break;
       case 'ready':
         this.updateState({ isConnected: true });
+        if (this.lastSessionContext) {
+          this.sendJson({ type: 'session_context', ...this.lastSessionContext });
+        }
+        break;
+      case 'session_closed':
+        this.updateState({
+          isConnected: false,
+          isRecording: false,
+          isListening: false,
+          error: message.reason === 'idle'
+            ? 'Session closed after inactivity. Tap the mic to continue.'
+            : 'Voice session closed. Tap the mic to reconnect.'
+        });
         break;
       case 'transcription':
         this.updateState({ transcription: message.text || '' });
@@ -364,6 +435,9 @@ export class VoiceService {
   }
 
   private cleanupCapture(): void {
+    this.speechActive = false;
+    this.silenceFrames = 0;
+    this.preRollFrames = [];
     if (this.processor) {
       this.processor.onaudioprocess = null;
       this.processor.disconnect();
