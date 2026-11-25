@@ -81,7 +81,7 @@
         "serve": {
           "builder": "@angular/build:dev-server",
           "options": {
-            "allowedHosts": ["preconversational-piedad-bardier.ngrok-free.dev"],
+            "allowedHosts": [".ngrok-free.app", ".ngrok-free.dev", "localhost"],
             "proxyConfig": "proxy.conf.json"
           },
           "configurations": {
