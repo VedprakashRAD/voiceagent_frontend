@@ -14,6 +14,7 @@ export interface VoiceState {
   isRecording: boolean;
   isListening: boolean;
   isSpeaking: boolean;
+  audioBlocked: boolean;
   transcription: string;
   error: string | null;
 }
@@ -57,12 +58,14 @@ export class VoiceService {
   private activeSources: AudioBufferSourceNode[] = [];
   private nextPlayTime = 0;
   private speakingTimer: any = null;
+  private audioUnlockArmed = false;
 
   private voiceStateSubject = new BehaviorSubject<VoiceState>({
     isConnected: false,
     isRecording: false,
     isListening: false,
     isSpeaking: false,
+    audioBlocked: false,
     transcription: '',
     error: null
   });
@@ -154,9 +157,10 @@ export class VoiceService {
 
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       this.captureContext = new AudioCtx({ sampleRate: SAMPLE_RATE });
-      await this.captureContext.resume();
-      // Resume playback at the same time so the click gesture unlocks audio output.
-      await this.ensurePlaybackContext();
+      // Auto-start has no click gesture to unlock audio, so resume without waiting
+      // and retry on the first user interaction if the browser keeps it suspended.
+      void this.captureContext.resume();
+      void this.ensurePlaybackContext();
 
       const actualRate = this.captureContext.sampleRate;
       this.sourceNode = this.captureContext.createMediaStreamSource(this.captureStream);
@@ -184,6 +188,11 @@ export class VoiceService {
       this.silentGain.connect(this.captureContext.destination);
 
       this.updateState({ isRecording: true, isListening: true, error: null });
+      window.setTimeout(() => {
+        const blocked = this.captureContext?.state === 'suspended' ||
+          this.playbackContext?.state === 'suspended';
+        this.updateState({ audioBlocked: blocked });
+      }, 600);
     } catch (error) {
       console.error('Failed to start Grok voice capture:', error);
       this.cleanupCapture();
@@ -215,6 +224,7 @@ export class VoiceService {
       isRecording: false,
       isListening: false,
       isSpeaking: false,
+      audioBlocked: false,
       transcription: '',
       error: null
     });
@@ -278,9 +288,30 @@ export class VoiceService {
       this.playbackContext = new AudioCtx({ sampleRate: SAMPLE_RATE });
     }
     if (this.playbackContext.state === 'suspended') {
-      await this.playbackContext.resume();
+      // Don't await: with auto-start there may be no user gesture yet, and some
+      // browsers leave resume() pending until the first interaction.
+      void this.playbackContext.resume();
+      this.armAudioUnlock();
     }
     return this.playbackContext;
+  }
+
+  /** Unlock capture/playback audio on the first interaction after auto-start. */
+  private armAudioUnlock(): void {
+    if (this.audioUnlockArmed || typeof document === 'undefined') return;
+    this.audioUnlockArmed = true;
+    const unlock = () => {
+      Promise.all([
+        this.captureContext?.resume(),
+        this.playbackContext?.resume(),
+      ]).then(() => this.updateState({ audioBlocked: false }))
+        .catch(() => undefined);
+      document.removeEventListener('pointerdown', unlock);
+      document.removeEventListener('keydown', unlock);
+      this.audioUnlockArmed = false;
+    };
+    document.addEventListener('pointerdown', unlock);
+    document.addEventListener('keydown', unlock);
   }
 
   private async playPcm16(base64: string): Promise<void> {

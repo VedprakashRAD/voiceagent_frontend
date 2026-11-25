@@ -31,6 +31,8 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   // Grok Realtime state only — no browser/local speech model.
   isListening = false;
   aiSpeaking = false;
+  isConnected = false;
+  audioBlocked = false;
   voiceError = '';
   private selectedVehicle: Vehicle | null = null;
 
@@ -70,6 +72,8 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
     this.voiceService.voiceState$.subscribe(state => {
       this.isListening = state.isRecording || state.isListening;
       this.aiSpeaking = state.isSpeaking;
+      this.isConnected = state.isConnected;
+      this.audioBlocked = state.audioBlocked;
       if (state.error) {
         this.voiceError = state.error;
       }
@@ -152,18 +156,22 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   }
 
   get statusSubtitle(): string {
+    if (this.audioBlocked) return 'Click anywhere to enable audio';
     if (this.isLoading) return 'Looking up your request';
     if (this.aiSpeaking) return 'Grok is responding';
     if (this.isListening) return 'Tell me what you need';
-    return 'Tap the microphone to speak';
+    if (!this.isConnected) return 'Connecting to Grok...';
+    return 'Starting the microphone...';
   }
 
   get hintText(): string {
+    if (this.audioBlocked) return 'Click anywhere to enable audio';
     if (this.voiceError) return this.voiceError;
     if (this.isLoading) return 'Checking...';
     if (this.aiSpeaking) return 'Speaking...';
     if (this.isListening) return 'Listening...';
-    return 'Tap to speak';
+    if (!this.isConnected) return 'Connecting to Grok...';
+    return 'Starting the microphone...';
   }
 
   goBack(): void {
@@ -199,9 +207,21 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
     try {
       await this.voiceService.connect(this.sessionId || undefined);
       this.sendVoiceContext();
+      await this.startVoiceAutomatically();
     } catch (error) {
       console.error('Could not connect to Grok Realtime:', error);
       this.voiceError = 'Voice service unavailable. Check backend and API key.';
+      this.cdr.detectChanges();
+    }
+  }
+
+  /** Begin listening as soon as the page connects — no tap required. */
+  private async startVoiceAutomatically(): Promise<void> {
+    try {
+      await this.voiceService.startRecording();
+    } catch (error) {
+      console.error('Could not auto-start Grok voice capture:', error);
+      this.voiceError = 'Microphone unavailable. Tap the microphone to retry.';
       this.cdr.detectChanges();
     }
   }
