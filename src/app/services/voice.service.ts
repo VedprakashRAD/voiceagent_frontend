@@ -275,7 +275,7 @@ export class VoiceService {
       case 'response_done':
         break;
       case 'error':
-        this.updateState({ error: message.error || 'Grok Realtime error' });
+        this.updateState({ error: message.error || 'ReadyAssist Voice AI error' });
         break;
       default:
         break;

@@ -98,7 +98,7 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
           this.isLoading = false;
           break;
         case 'error':
-          this.voiceError = message.error || 'Grok Realtime error';
+          this.voiceError = message.error || 'ReadyAssist Voice AI error';
           this.isLoading = false;
           break;
         default:
@@ -158,9 +158,9 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   get statusSubtitle(): string {
     if (this.audioBlocked) return 'Click anywhere to enable audio';
     if (this.isLoading) return 'Looking up your request';
-    if (this.aiSpeaking) return 'Grok is responding';
+    if (this.aiSpeaking) return 'ReadyAssist Voice AI responding';
     if (this.isListening) return 'Tell me what you need';
-    if (!this.isConnected) return 'Connecting to Grok...';
+    if (!this.isConnected) return 'Connecting to ReadyAssist Voice AI...';
     return 'Starting the microphone...';
   }
 
@@ -170,7 +170,7 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
     if (this.isLoading) return 'Checking...';
     if (this.aiSpeaking) return 'Speaking...';
     if (this.isListening) return 'Listening...';
-    if (!this.isConnected) return 'Connecting to Grok...';
+    if (!this.isConnected) return 'Connecting to ReadyAssist Voice AI...';
     return 'Starting the microphone...';
   }
 
