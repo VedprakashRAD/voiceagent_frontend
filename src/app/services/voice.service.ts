@@ -1,8 +1,9 @@
 /**
- * ReadyAssist Voice Agent — Voice Service
+ * ReadyAssist Voice Agent — Grok Realtime Speech-to-Speech service.
  *
- * Handles real-time voice communication with the backend via WebSocket.
- * Supports microphone input, audio playback, and real-time transcription.
+ * Sends 24 kHz PCM16 audio to the backend WebSocket, which proxies it to
+ * xAI's Realtime API. Incoming audio is base64 PCM16 and is played through
+ * a Web Audio playback queue.
  */
 
 import { Injectable } from '@angular/core';
@@ -18,25 +19,45 @@ export interface VoiceState {
 }
 
 export interface VoiceMessage {
-  type: 'transcription' | 'response' | 'session_info' | 'error';
+  type: 'session_info' | 'ready' | 'transcription' | 'response_delta' |
+        'response_done' | 'audio' | 'speech_started' | 'tool_call' | 'error' | 'pong';
   text?: string;
+  data?: string;
+  name?: string;
+  success?: boolean;
   session_id?: string;
-  session_state?: string;
+  state?: string;
   error?: string;
 }
+
+export interface VoiceSessionContext {
+  customer_name?: string;
+  customer_mobile?: string;
+  customer_id?: string;
+  vehicle?: Record<string, unknown> | null;
+}
+
+const SAMPLE_RATE = 24000;
 
 @Injectable({
   providedIn: 'root'
 })
 export class VoiceService {
-  private readonly wsUrl = 'ws://localhost:8000/api/ws/voice';
-
   private websocket: WebSocket | null = null;
-  private mediaRecorder: MediaRecorder | null = null;
-  private audioContext: AudioContext | null = null;
-  private audioStream: MediaStream | null = null;
 
-  // State observables
+  // Capture (microphone → PCM16)
+  private captureStream: MediaStream | null = null;
+  private captureContext: AudioContext | null = null;
+  private processor: ScriptProcessorNode | null = null;
+  private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private silentGain: GainNode | null = null;
+
+  // Playback (PCM16 → speakers)
+  private playbackContext: AudioContext | null = null;
+  private activeSources: AudioBufferSourceNode[] = [];
+  private nextPlayTime = 0;
+  private speakingTimer: any = null;
+
   private voiceStateSubject = new BehaviorSubject<VoiceState>({
     isConnected: false,
     isRecording: false,
@@ -45,229 +66,150 @@ export class VoiceService {
     transcription: '',
     error: null
   });
-
   public voiceState$ = this.voiceStateSubject.asObservable();
 
-  // Message stream
   private messagesSubject = new BehaviorSubject<VoiceMessage | null>(null);
   public messages$ = this.messagesSubject.asObservable();
 
+  private get wsUrl(): string {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host || 'localhost:4200';
+    return `${protocol}//${host}/api/ws/realtime`;
+  }
+
   constructor() {}
 
-  /**
-   * Connect to the voice WebSocket
-   */
+  /** Connect to the Grok Realtime WebSocket. */
   connect(sessionId?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.websocket?.readyState === WebSocket.OPEN) {
         resolve();
         return;
       }
+      if (this.websocket?.readyState === WebSocket.CONNECTING) {
+        // Wait briefly for the pending connection rather than opening a second socket.
+        const check = window.setInterval(() => {
+          if (!this.websocket) {
+            window.clearInterval(check);
+            reject(new Error('Connection failed'));
+          } else if (this.websocket.readyState === WebSocket.OPEN) {
+            window.clearInterval(check);
+            resolve();
+          } else if (this.websocket.readyState === WebSocket.CLOSED) {
+            window.clearInterval(check);
+            reject(new Error('Connection failed'));
+          }
+        }, 50);
+        return;
+      }
 
-      const url = sessionId ? `${this.wsUrl}?session_id=${sessionId}` : this.wsUrl;
+      const url = sessionId ? `${this.wsUrl}?session_id=${encodeURIComponent(sessionId)}` : this.wsUrl;
       this.websocket = new WebSocket(url);
+      let settled = false;
 
       this.websocket.onopen = () => {
-        console.log('Voice WebSocket connected');
+        settled = true;
         this.updateState({ isConnected: true, error: null });
         resolve();
       };
 
-      this.websocket.onmessage = (event) => {
-        this.handleWebSocketMessage(event);
-      };
+      this.websocket.onmessage = (event) => this.handleWebSocketMessage(event);
 
       this.websocket.onerror = (error) => {
-        console.error('Voice WebSocket error:', error);
-        this.updateState({ error: 'Connection error', isConnected: false });
-        reject(error);
+        console.error('Grok Realtime WebSocket error:', error);
+        this.updateState({ error: 'Voice connection error', isConnected: false });
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
       };
 
       this.websocket.onclose = () => {
-        console.log('Voice WebSocket closed');
-        this.updateState({ isConnected: false, isRecording: false });
+        settled = true;
+        this.updateState({ isConnected: false, isRecording: false, isListening: false });
       };
     });
   }
 
-  /**
-   * Handle incoming WebSocket messages
-   */
-  private handleWebSocketMessage(event: MessageEvent): void {
-    if (event.data instanceof Blob) {
-      // Audio data from server
-      this.playAudio(event.data);
-    } else {
-      // JSON message
-      try {
-        const message: VoiceMessage = JSON.parse(event.data);
-        this.messagesSubject.next(message);
-
-        switch (message.type) {
-          case 'transcription':
-            this.updateState({ 
-              transcription: message.text || '',
-              isListening: false 
-            });
-            break;
-
-          case 'response':
-            // Text response received (audio will follow)
-            this.updateState({ isSpeaking: true });
-            break;
-
-          case 'session_info':
-            console.log('Session info:', message);
-            break;
-
-          case 'error':
-            this.updateState({ error: message.error || 'Unknown error' });
-            break;
-        }
-      } catch (e) {
-        console.error('Failed to parse message:', e);
-      }
-    }
+  /** Send customer/vehicle details so the backend session is personalised. */
+  sendSessionContext(context: VoiceSessionContext): void {
+    this.sendJson({ type: 'session_context', ...context });
   }
 
-  /**
-   * Start recording audio from microphone
-   */
+  /** Start streaming microphone audio to Grok. */
   async startRecording(): Promise<void> {
-    if (this.mediaRecorder?.state === 'recording') {
-      console.warn('Already recording');
+    if (this.captureStream) {
       return;
     }
+    await this.connect();
 
     try {
-      // Request microphone access
-      this.audioStream = await navigator.mediaDevices.getUserMedia({
+      this.captureStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          sampleRate: 16000,
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true
         }
       });
 
-      // Create MediaRecorder
-      this.mediaRecorder = new MediaRecorder(this.audioStream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      this.captureContext = new AudioCtx({ sampleRate: SAMPLE_RATE });
+      await this.captureContext.resume();
+      // Resume playback at the same time so the click gesture unlocks audio output.
+      await this.ensurePlaybackContext();
 
-      // Send audio chunks to server
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0 && this.websocket?.readyState === WebSocket.OPEN) {
-          // Convert to ArrayBuffer and send
-          event.data.arrayBuffer().then(buffer => {
-            this.websocket?.send(buffer);
-          });
+      const actualRate = this.captureContext.sampleRate;
+      this.sourceNode = this.captureContext.createMediaStreamSource(this.captureStream);
+      this.processor = this.captureContext.createScriptProcessor(4096, 1, 1);
+      this.silentGain = this.captureContext.createGain();
+      this.silentGain.gain.value = 0;
+
+      this.processor.onaudioprocess = (event) => {
+        if (this.websocket?.readyState !== WebSocket.OPEN) return;
+        const input = event.inputBuffer.getChannelData(0);
+        const pcm = this.resample(input, actualRate, SAMPLE_RATE);
+        const int16 = new Int16Array(pcm.length);
+        for (let i = 0; i < pcm.length; i++) {
+          const sample = Math.max(-1, Math.min(1, pcm[i]));
+          int16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
         }
+        this.sendJson({
+          type: 'audio',
+          data: this.arrayBufferToBase64(int16.buffer)
+        });
       };
 
-      this.mediaRecorder.onstart = () => {
-        this.updateState({ isRecording: true, isListening: true, error: null });
-      };
+      this.sourceNode.connect(this.processor);
+      this.processor.connect(this.silentGain);
+      this.silentGain.connect(this.captureContext.destination);
 
-      this.mediaRecorder.onstop = () => {
-        this.updateState({ isRecording: false, isListening: false });
-        
-        // Notify server that recording stopped
-        if (this.websocket?.readyState === WebSocket.OPEN) {
-          this.websocket.send(JSON.stringify({ type: 'stop_recording' }));
-        }
-      };
-
-      // Start recording with 100ms chunks for low latency
-      this.mediaRecorder.start(100);
-
-      console.log('Recording started');
+      this.updateState({ isRecording: true, isListening: true, error: null });
     } catch (error) {
-      console.error('Failed to start recording:', error);
-      this.updateState({ 
-        error: 'Microphone access denied or unavailable',
-        isRecording: false 
-      });
+      console.error('Failed to start Grok voice capture:', error);
+      this.cleanupCapture();
+      this.updateState({ error: 'Microphone access denied or unavailable', isRecording: false });
       throw error;
     }
   }
 
-  /**
-   * Stop recording audio
-   */
+  /** Stop microphone streaming. Grok's server VADfinalises the turn. */
   stopRecording(): void {
-    if (this.mediaRecorder?.state === 'recording') {
-      this.mediaRecorder.stop();
-      console.log('Recording stopped');
-    }
-
-    // Stop audio tracks
-    if (this.audioStream) {
-      this.audioStream.getTracks().forEach(track => track.stop());
-      this.audioStream = null;
-    }
+    this.cleanupCapture();
+    this.updateState({ isRecording: false, isListening: false });
   }
 
-  /**
-   * Play audio response from server
-   */
-  private async playAudio(audioBlob: Blob): Promise<void> {
-    try {
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-
-      audio.onplay = () => {
-        this.updateState({ isSpeaking: true });
-      };
-
-      audio.onended = () => {
-        this.updateState({ isSpeaking: false });
-        URL.revokeObjectURL(audioUrl);
-      };
-
-      audio.onerror = (error) => {
-        console.error('Audio playback error:', error);
-        this.updateState({ isSpeaking: false, error: 'Audio playback failed' });
-        URL.revokeObjectURL(audioUrl);
-      };
-
-      await audio.play();
-    } catch (error) {
-      console.error('Failed to play audio:', error);
-      this.updateState({ isSpeaking: false, error: 'Audio playback failed' });
-    }
-  }
-
-  /**
-   * Send text message (without voice)
-   */
+  /** Send a typed message through the same Realtime session. */
   sendTextMessage(text: string): void {
-    if (this.websocket?.readyState === WebSocket.OPEN) {
-      this.websocket.send(JSON.stringify({
-        type: 'text_message',
-        text: text
-      }));
-    } else {
-      console.error('WebSocket not connected');
-    }
+    this.sendJson({ type: 'text_message', text });
   }
 
-  /**
-   * Disconnect from voice WebSocket
-   */
   disconnect(): void {
     this.stopRecording();
-
+    this.stopPlayback();
     if (this.websocket) {
       this.websocket.close();
       this.websocket = null;
     }
-
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
-
     this.updateState({
       isConnected: false,
       isRecording: false,
@@ -278,32 +220,177 @@ export class VoiceService {
     });
   }
 
-  /**
-   * Update voice state
-   */
-  private updateState(partialState: Partial<VoiceState>): void {
-    const currentState = this.voiceStateSubject.value;
-    this.voiceStateSubject.next({ ...currentState, ...partialState });
-  }
-
-  /**
-   * Get current voice state
-   */
   getState(): VoiceState {
     return this.voiceStateSubject.value;
   }
 
-  /**
-   * Check if microphone is available
-   */
-  async checkMicrophoneAvailability(): Promise<boolean> {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const hasAudioInput = devices.some(device => device.kind === 'audioinput');
-      return hasAudioInput;
-    } catch (error) {
-      console.error('Failed to check microphone:', error);
-      return false;
+  private sendJson(payload: unknown): void {
+    if (this.websocket?.readyState === WebSocket.OPEN) {
+      this.websocket.send(JSON.stringify(payload));
+    } else {
+      console.warn('Voice WebSocket is not connected; message dropped');
     }
+  }
+
+  private handleWebSocketMessage(event: MessageEvent): void {
+    let message: VoiceMessage;
+    try {
+      message = typeof event.data === 'string' ? JSON.parse(event.data) : JSON.parse(event.data as string);
+    } catch (error) {
+      console.error('Invalid Realtime message from server:', error);
+      return;
+    }
+    this.messagesSubject.next(message);
+
+    switch (message.type) {
+      case 'session_info':
+        break;
+      case 'ready':
+        this.updateState({ isConnected: true });
+        break;
+      case 'transcription':
+        this.updateState({ transcription: message.text || '' });
+        break;
+      case 'response_delta':
+        break;
+      case 'audio':
+        if (message.data) {
+          this.playPcm16(message.data);
+        }
+        break;
+      case 'speech_started':
+        this.stopPlayback();
+        this.updateState({ isSpeaking: false });
+        break;
+      case 'response_done':
+        break;
+      case 'error':
+        this.updateState({ error: message.error || 'Grok Realtime error' });
+        break;
+      default:
+        break;
+    }
+  }
+
+  private async ensurePlaybackContext(): Promise<AudioContext> {
+    if (!this.playbackContext) {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      this.playbackContext = new AudioCtx({ sampleRate: SAMPLE_RATE });
+    }
+    if (this.playbackContext.state === 'suspended') {
+      await this.playbackContext.resume();
+    }
+    return this.playbackContext;
+  }
+
+  private async playPcm16(base64: string): Promise<void> {
+    try {
+      const ctx = await this.ensurePlaybackContext();
+      const bytes = this.base64ToUint8Array(base64);
+      const int16 = new Int16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / (int16[i] < 0 ? 0x8000 : 0x7fff);
+      }
+
+      const buffer = ctx.createBuffer(1, float32.length, SAMPLE_RATE);
+      buffer.copyToChannel(float32, 0);
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      const startAt = Math.max(ctx.currentTime, this.nextPlayTime);
+      source.start(startAt);
+      this.nextPlayTime = startAt + buffer.duration;
+      this.activeSources.push(source);
+      source.onended = () => {
+        this.activeSources = this.activeSources.filter(item => item !== source);
+      };
+
+      this.updateState({ isSpeaking: true });
+      if (this.speakingTimer) window.clearTimeout(this.speakingTimer);
+      this.speakingTimer = window.setTimeout(() => {
+        if (this.activeSources.length === 0) {
+          this.updateState({ isSpeaking: false });
+        }
+      }, Math.max(0, (this.nextPlayTime - ctx.currentTime) * 1000) + 100);
+    } catch (error) {
+      console.error('Grok audio playback failed:', error);
+      this.updateState({ error: 'Audio playback failed' });
+    }
+  }
+
+  private stopPlayback(): void {
+    for (const source of this.activeSources) {
+      try { source.stop(); } catch { /* already stopped */ }
+    }
+    this.activeSources = [];
+    this.nextPlayTime = 0;
+    if (this.speakingTimer) {
+      window.clearTimeout(this.speakingTimer);
+      this.speakingTimer = null;
+    }
+  }
+
+  private cleanupCapture(): void {
+    if (this.processor) {
+      this.processor.onaudioprocess = null;
+      this.processor.disconnect();
+      this.processor = null;
+    }
+    if (this.sourceNode) {
+      this.sourceNode.disconnect();
+      this.sourceNode = null;
+    }
+    if (this.silentGain) {
+      this.silentGain.disconnect();
+      this.silentGain = null;
+    }
+    if (this.captureStream) {
+      this.captureStream.getTracks().forEach(track => track.stop());
+      this.captureStream = null;
+    }
+    if (this.captureContext) {
+      this.captureContext.close().catch(() => undefined);
+      this.captureContext = null;
+    }
+  }
+
+  private resample(input: Float32Array, fromRate: number, toRate: number): Float32Array {
+    if (Math.abs(fromRate - toRate) < 1) return input;
+    const ratio = fromRate / toRate;
+    const outputLength = Math.floor(input.length / ratio);
+    const output = new Float32Array(outputLength);
+    for (let i = 0; i < outputLength; i++) {
+      const position = i * ratio;
+      const index = Math.floor(position);
+      const fraction = position - index;
+      const next = input[index + 1] ?? input[index];
+      output[i] = input[index] * (1 - fraction) + next * fraction;
+    }
+    return output;
+  }
+
+  private arrayBufferToBase64(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
+    }
+    return btoa(binary);
+  }
+
+  private base64ToUint8Array(base64: string): Uint8Array {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  private updateState(partialState: Partial<VoiceState>): void {
+    this.voiceStateSubject.next({ ...this.voiceStateSubject.value, ...partialState });
   }
 }

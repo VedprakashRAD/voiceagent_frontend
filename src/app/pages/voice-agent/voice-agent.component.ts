@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ChatService } from '../../services/chat.service';
 import { ApiService, CustomerDetails } from '../../services/api.service';
+import { VoiceService } from '../../services/voice.service';
 
 @Component({
   selector: 'app-voice-agent',
@@ -33,12 +34,13 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   userName: string = 'ReadyAssist AI';
   vehicleName: string = '';
   
-  // Speech API properties
+  // Speech / Realtime properties
   isListening = false;
   aiSpeaking = false;
-  recognition: any = null;
   synthesis: any = null;
-  private isStartingRecognition = false;
+  voiceError = '';
+  private voiceResponseText = '';
+  private selectedVehicle: any = null;
 
   // Web Audio API properties for orb
   private audioContext?: AudioContext;
@@ -47,10 +49,15 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   constructor(
     private chatService: ChatService, 
     private apiService: ApiService,
+    private voiceService: VoiceService,
     private cdr: ChangeDetectorRef,
     private route: ActivatedRoute,
     private router: Router
   ) {
+    if ('speechSynthesis' in window) {
+      this.synthesis = window.speechSynthesis;
+    }
+
     // Get user and vehicle IDs from query params
     this.route.queryParams.subscribe(params => {
       this.userId = params['userId'] || null;
@@ -92,7 +99,46 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
       this.cdr.detectChanges();
     });
 
-    this.initSpeechApi();
+    // Grok Realtime voice state
+    this.voiceService.voiceState$.subscribe(state => {
+      this.isListening = state.isRecording || state.isListening;
+      this.aiSpeaking = state.isSpeaking;
+      this.isConnected = state.isConnected;
+      if (state.error) {
+        this.voiceError = state.error;
+      }
+      this.cdr.detectChanges();
+    });
+
+    this.voiceService.messages$.subscribe(message => {
+      if (!message) return;
+      switch (message.type) {
+        case 'session_info':
+          if (message.session_id) {
+            this.sessionId = message.session_id;
+          }
+          this.voiceError = '';
+          break;
+        case 'ready':
+          this.voiceError = '';
+          break;
+        case 'transcription':
+          this.inputText = message.text || '';
+          break;
+        case 'response_delta':
+          this.voiceResponseText += message.text || '';
+          break;
+        case 'response_done':
+          this.voiceResponseText = '';
+          break;
+        case 'error':
+          this.voiceError = message.error || 'Voice error';
+          break;
+        default:
+          break;
+      }
+      this.cdr.detectChanges();
+    });
   }
 
   ngOnInit() {
@@ -112,15 +158,47 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
       this.apiService.getAllVehicles().subscribe(vehicles => {
         const vehicle = vehicles.find(v => v._id === this.vehicleId);
         if (vehicle) {
+          this.selectedVehicle = vehicle;
           this.vehicleName = `${vehicle.make} ${vehicle.model}`;
+          this.sendVoiceContext();
           this.cdr.detectChanges();
         }
       });
     }
+
+    this.connectVoice();
   }
 
   ngOnDestroy(): void {
+    this.voiceService.disconnect();
     this.stopAudioAnalysis();
+  }
+
+  private async connectVoice(): Promise<void> {
+    try {
+      await this.voiceService.connect(this.sessionId || undefined);
+      this.sendVoiceContext();
+    } catch (error) {
+      console.error('Could not connect to Grok Realtime:', error);
+      this.voiceError = 'Voice service unavailable. Check backend and API key.';
+      this.cdr.detectChanges();
+    }
+  }
+
+  private sendVoiceContext(): void {
+    this.voiceService.sendSessionContext({
+      customer_name: this.customerName || undefined,
+      customer_mobile: this.customerMobile || undefined,
+      customer_id: this.customerId || undefined,
+      vehicle: this.selectedVehicle
+        ? {
+            id: this.selectedVehicle._id,
+            make: this.selectedVehicle.make,
+            model: this.selectedVehicle.model,
+            registration: this.selectedVehicle.registration || this.selectedVehicle.vehicleNo || '',
+          }
+        : null,
+    });
   }
 
   get orbState(): string {
@@ -148,68 +226,11 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
   }
 
   get hintText(): string {
+    if (this.voiceError) return this.voiceError;
     if (this.isLoading) return 'Thinking...';
     if (this.aiSpeaking) return 'Speaking...';
     if (this.isListening) return 'Listening...';
     return 'Tap to speak';
-  }
-
-  private initSpeechApi(): void {
-    if ('speechSynthesis' in window) {
-      this.synthesis = window.speechSynthesis;
-    } else {
-      console.warn('Text-to-Speech is not supported in this browser.');
-    }
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      this.recognition = new SpeechRecognition();
-      this.recognition.continuous = false;
-      this.recognition.interimResults = true;
-      this.recognition.lang = 'en-US';
-
-      this.recognition.onstart = () => {
-        this.isStartingRecognition = false;
-        this.isListening = true;
-        this.startAudioAnalysis();
-        this.cdr.detectChanges();
-      };
-
-      this.recognition.onresult = (event: any) => {
-        let interimTranscript = '';
-        let finalTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          } else {
-            interimTranscript += event.results[i][0].transcript;
-          }
-        }
-        this.inputText = finalTranscript || interimTranscript;
-        this.cdr.detectChanges();
-      };
-
-      this.recognition.onerror = (event: any) => {
-        console.error('Speech recognition error', event.error);
-        this.isStartingRecognition = false;
-        this.isListening = false;
-        this.stopAudioAnalysis();
-        this.cdr.detectChanges();
-      };
-
-      this.recognition.onend = () => {
-        this.isStartingRecognition = false;
-        this.isListening = false;
-        this.stopAudioAnalysis();
-        this.cdr.detectChanges();
-        if (this.inputText.trim().length > 0) {
-          this.sendMessage();
-        }
-      };
-    } else {
-      console.warn('Speech Recognition is not supported in this browser.');
-    }
   }
 
   goBack() {
@@ -218,25 +239,22 @@ export class VoiceAgentComponent implements OnInit, OnDestroy {
     });
   }
 
-  toggleListening(): void {
-    if (!this.recognition) {
-      alert('Speech recognition is not supported in your browser. Try using Chrome or Edge.');
-      return;
-    }
-
-    if (this.isListening || this.isStartingRecognition) {
-      this.isStartingRecognition = false;
-      this.recognition.stop();
+  async toggleListening(): Promise<void> {
+    if (this.isListening) {
+      this.voiceService.stopRecording();
+      this.stopAudioAnalysis();
       return;
     }
 
     this.inputText = '';
+    this.voiceError = '';
     try {
-      this.isStartingRecognition = true;
-      this.recognition.start();
+      await this.voiceService.startRecording();
+      await this.startAudioAnalysis();
     } catch (err) {
-      this.isStartingRecognition = false;
-      console.error('Speech recognition failed to start', err);
+      console.error('Could not start Grok voice capture:', err);
+      this.voiceError = 'Microphone unavailable or voice service disconnected.';
+      this.cdr.detectChanges();
     }
   }
 
