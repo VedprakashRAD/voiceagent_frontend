@@ -22,7 +22,7 @@ export interface VoiceState {
 export interface VoiceMessage {
   type: 'session_info' | 'ready' | 'transcription' | 'response_delta' |
         'response_done' | 'audio' | 'speech_started' | 'tool_call' | 'error' | 'pong' |
-        'session_closed';
+        'session_closed' | 'budget_warning';
   reason?: string;
   text?: string;
   data?: string;
@@ -31,6 +31,7 @@ export interface VoiceMessage {
   session_id?: string;
   state?: string;
   error?: string;
+  estimated_cost_usd?: number;
 }
 
 export interface VoiceSessionContext {
@@ -43,9 +44,10 @@ export interface VoiceSessionContext {
 const SAMPLE_RATE = 24000;
 
 // Client-controlled turns: only upload actual speech, then commit.
-// 4096 samples at 24 kHz ≈ 171 ms per frame; 6 silent frames ≈ 1 s.
+// 4096 samples at 24 kHz ≈ 171 ms per frame. 3 pre-roll frames ≈ 0.5 s and
+// 5 silent frames ≈ 0.85 s before commit.
 const VOICE_RMS_THRESHOLD = 0.015;
-const SILENCE_FRAMES_TO_COMMIT = 6;
+const SILENCE_FRAMES_TO_COMMIT = 5;
 const PREROLL_FRAMES = 3;
 
 @Injectable({
@@ -94,7 +96,10 @@ export class VoiceService {
     return `${protocol}//${host}/api/ws/realtime`;
   }
 
-  constructor() {}
+  constructor() {
+    // Close the xAI session when the tab is closed or navigated away.
+    window.addEventListener('beforeunload', () => this.disconnect());
+  }
 
   /** Connect to the Grok Realtime WebSocket. */
   connect(sessionId?: string): Promise<void> {
@@ -319,14 +324,29 @@ export class VoiceService {
           this.sendJson({ type: 'session_context', ...this.lastSessionContext });
         }
         break;
-      case 'session_closed':
+      case 'session_closed': {
+        const reason = message.reason;
+        const hint =
+          reason === 'idle'
+            ? 'Session closed after inactivity. Tap the mic to continue.'
+            : reason === 'max_duration'
+              ? 'Session reached the 15-minute limit. Tap the mic to start a new one.'
+              : reason === 'budget'
+                ? 'Daily voice budget reached. Tap the mic to reconnect later.'
+                : reason === 'duplicate_session'
+                  ? 'Another voice session is already active for this customer.'
+                  : 'Voice session closed. Tap the mic to reconnect.';
         this.updateState({
           isConnected: false,
           isRecording: false,
           isListening: false,
-          error: message.reason === 'idle'
-            ? 'Session closed after inactivity. Tap the mic to continue.'
-            : 'Voice session closed. Tap the mic to reconnect.'
+          error: hint
+        });
+        break;
+      }
+      case 'budget_warning':
+        this.updateState({
+          error: `Voice cost warning: about $${(message.estimated_cost_usd ?? 0).toFixed(2)} used this session.`
         });
         break;
       case 'transcription':
